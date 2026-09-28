@@ -8,7 +8,7 @@ export function updateLeafWeight(root: TreeNode, id: string, weight: number): Tr
   }
   return {
     ...root,
-    children: root.children!.map((c, i) => i === 0 ? updateLeafWeight(c, id, weight) : c),
+    children: root.children!.map((c) => updateLeafWeight(c, id, weight)),
   };
 }
 

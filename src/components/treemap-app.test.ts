@@ -5,6 +5,20 @@ import type { TreemapApp } from './treemap-app';
 import { layoutTreemap } from '../treemap/layout';
 import { PRESETS } from '../treemap/presets';
 
+// jsdom 不实现 ResizeObserver：用可手动触发的桩替代，模拟窗口/容器尺寸变化
+let resizeCallback: (() => void) | null = null;
+class ResizeObserverStub {
+  constructor(cb: () => void) {
+    resizeCallback = cb;
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {
+    resizeCallback = null;
+  }
+}
+(globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
+
 const leafRects = (el: TreemapApp): SVGRectElement[] => [
   ...el.shadowRoot!.querySelectorAll<SVGRectElement>('rect.leaf'),
 ];
@@ -161,5 +175,74 @@ describe('<treemap-app>', () => {
       await el.updateComplete;
       expect(el.shadowRoot!.querySelector('.errors')!.textContent).not.toBe('');
     }
+  });
+
+  it('非首个分支：编辑第二个及以后子树内叶子权重也会同步重排', async () => {
+    // 预设树中 g2 位于第三个顶层分支 gamma
+    const before = el.shadowRoot!.querySelector('rect.leaf[data-id="g2"]')!;
+    const beforeW = Number(before.getAttribute('width'));
+    const beforeH = Number(before.getAttribute('height'));
+
+    setInput(el, 'input[data-leaf="g2"]', '200');
+    await el.updateComplete;
+
+    const expected = layoutTreemap(el._tree, 640, 480);
+    expect(expected.leaves.find((l) => l.id === 'g2')!.weight).toBe(200);
+    const after = el.shadowRoot!.querySelector('rect.leaf[data-id="g2"]')!;
+    expect(Number(after.getAttribute('width')) !== beforeW
+      || Number(after.getAttribute('height')) !== beforeH).toBe(true);
+    expect(domAreaSum(el)).toBe(640 * 480);
+  });
+
+  it('JSON：超限叶权重（1,000,001）被拒绝且树不变', async () => {
+    const before = leafRects(el).length;
+    setInput(
+      el,
+      '#json-input',
+      JSON.stringify({ id: 'root', children: [{ id: 'a', weight: 1_000_001 }] }),
+    );
+    el.shadowRoot!.querySelector<HTMLButtonElement>('#apply-json')!.click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.errors')!.textContent).not.toBe('');
+    expect(leafRects(el)).toHaveLength(before);
+  });
+
+  it('适应窗口：勾选后按容器宽度重算，窗口（容器）变宽后再次重算', async () => {
+    let stageWidth = 720;
+    const stage = el.shadowRoot!.querySelector<HTMLElement>('.stage')!;
+    Object.defineProperty(stage, 'clientWidth', { configurable: true, get: () => stageWidth });
+    stage.getBoundingClientRect = () =>
+      ({ top: 60 } as DOMRect);
+
+    const checkbox = el.shadowRoot!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+
+    let svg = el.shadowRoot!.querySelector('svg')!;
+    expect(Number(svg.getAttribute('width'))).toBe(720);
+    expect(domAreaSum(el)).toBe(
+      Number(svg.getAttribute('width')) * Number(svg.getAttribute('height')),
+    );
+
+    // 容器随窗口变宽 → ResizeObserver 回调 → 画布重算
+    stageWidth = 850;
+    expect(resizeCallback).toBeTruthy();
+    resizeCallback!();
+    await el.updateComplete;
+    svg = el.shadowRoot!.querySelector('svg')!;
+    expect(Number(svg.getAttribute('width'))).toBe(850);
+    expect(domAreaSum(el)).toBe(
+      Number(svg.getAttribute('width')) * Number(svg.getAttribute('height')),
+    );
+
+    // 取消勾选后不再随窗口重算
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+    stageWidth = 800;
+    resizeCallback!();
+    await el.updateComplete;
+    expect(Number(el.shadowRoot!.querySelector('svg')!.getAttribute('width'))).toBe(850);
   });
 });

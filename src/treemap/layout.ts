@@ -21,7 +21,7 @@ export function compareByWeightThenId(
   b: { weight: number; id: string },
 ): number {
   if (a.weight !== b.weight) return b.weight - a.weight;
-  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  return compareId(a.id, b.id);
 }
 
 /**
@@ -31,8 +31,23 @@ export function compareByWeightThenId(
  */
 export function largestRemainder(weights: number[], total: number, ids: string[]): number[] {
   const sum = weights.reduce((a, b) => a + b, 0)
-  if (sum <= 0) return weights.map(() => 0)
-  return weights.map((w) => Math.floor((w * total) / sum))
+  if (sum <= 0 || total <= 0) return weights.map(() => 0)
+  const result = weights.map((w) => Math.floor((w * total) / sum))
+  // 余数分子：w·total - floor(w·total/Σ)·Σ（分母同为 Σ，可直接比较分子）
+  const remainders = weights.map((w, i) => w * total - result[i] * sum)
+  let remaining = total - result.reduce((a, b) => a + b, 0)
+  const order = weights.map((_, i) => i)
+  order.sort((i, j) => {
+    if (remainders[j] !== remainders[i]) return remainders[j] - remainders[i]
+    const byId = compareId(ids[i], ids[j])
+    return byId !== 0 ? byId : i - j
+  })
+  for (const i of order) {
+    if (remaining <= 0) break
+    result[i] += 1
+    remaining -= 1
+  }
+  return result
 }
 
 function compareId(a: string, b: string): number {
@@ -64,7 +79,23 @@ export function worstRatio(weights: number[], side: number): number {
  * 否则结束当前行并以该项另起一行。返回每行的下标列表。
  */
 export function formRows(weights: number[], side: number): number[][] {
-  return weights.map((_, i) => [i])
+  const rows: number[][] = []
+  let current: number[] = []
+  let currentWorst = Infinity
+  for (let i = 0; i < weights.length; i++) {
+    const candidate = [...current, i]
+    const candidateWorst = worstRatio(candidate.map((j) => weights[j]), side)
+    if (current.length === 0 || candidateWorst <= currentWorst) {
+      current = candidate
+      currentWorst = candidateWorst
+    } else {
+      rows.push(current)
+      current = [i]
+      currentWorst = worstRatio([weights[i]], side)
+    }
+  }
+  if (current.length > 0) rows.push(current)
+  return rows
 }
 
 function computeWeights(node: TreeNode, out: Map<string, number>): number {
@@ -118,13 +149,49 @@ function layoutNode(
     leaves.push({ id: node.id, path: selfPath, weight: node.weight!, rect, hidden, depth })
     return { id: node.id, rect, weight, depth, children: [] }
   }
+
+  // 1. 子节点按子树权重降序、id 升序进入 squarify
+  const ordered = node.children!
+    .map((child) => ({ child, childWeight: weights.get(child.id)! }))
+    .sort((a, b) => compareByWeightThenId({ id: a.child.id, weight: a.childWeight }, { id: b.child.id, weight: b.childWeight }))
+  const orderedWeights = ordered.map((o) => o.childWeight)
+  const orderedIds = ordered.map((o) => o.child.id)
   const children: NodeLayout[] = []
-  let x = rect.x
-  for (const child of node.children!) {
-    const childWeight = weights.get(child.id)!
-    const w = Math.floor(rect.w * childWeight / weight)
-    children.push(layoutNode(child, { x, y: rect.y, w, h: rect.h }, selfPath, depth + 1, weights, leaves))
-    x += w
-  }
+
+  // 2. 沿父矩形短边组行：宽 ≥ 高 ⇒ 竖条行（行沿长边排布，行内沿短边/高度堆叠）；
+  //    否则横条行（行沿长边/高度排布，行内沿短边/宽度堆叠）。
+  //    组行时 side 为短边（行内各项的堆叠方向）。
+  const columns = rect.w >= rect.h
+  const longSide = columns ? rect.w : rect.h
+  const shortSide = columns ? rect.h : rect.w
+  const rows = formRows(orderedWeights, shortSide)
+
+  // 3. 行厚（沿长边）用最大余数法分配，行以其行首项的 id 参与裁决
+  const rowWeights = rows.map((row) => row.reduce((s, j) => s + orderedWeights[j], 0))
+  const rowIds = rows.map((row) => orderedIds[row[0]])
+  const rowThickness = largestRemainder(rowWeights, longSide, rowIds)
+
+  let across = 0 // 沿长边已经占据的像素
+  rows.forEach((row, r) => {
+    const thickness = rowThickness[r]
+    // 行内各项沿短边堆叠：跨度同样用最大余数法分配
+    const itemWeights = row.map((j) => orderedWeights[j])
+    const itemIds = row.map((j) => orderedIds[j])
+    const itemSpans = largestRemainder(itemWeights, shortSide, itemIds)
+
+    let along = 0 // 沿短边已经占据的像素
+    row.forEach((j, k) => {
+      const span = itemSpans[k]
+      const childRect: Rect = columns
+        ? { x: rect.x + across, y: rect.y + along, w: thickness, h: span }
+        : { x: rect.x + along, y: rect.y + across, w: span, h: thickness }
+      children.push(
+        layoutNode(ordered[j].child, childRect, selfPath, depth + 1, weights, leaves),
+      )
+      along += span
+    })
+    across += thickness
+  })
+
   return { id: node.id, rect, weight, depth, children }
 }

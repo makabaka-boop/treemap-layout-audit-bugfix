@@ -302,7 +302,16 @@ export class TreemapApp extends LitElement {
   }
 
   private _fitToContainer(): void {
-    return;
+    if (!this._autoFit) return;
+    const stage = this.renderRoot.querySelector('.stage') as HTMLElement | null;
+    const w = clampCanvas(stage?.clientWidth ?? 0);
+    // 高以视口剩余空间为准（.stage 高度由画布撑开，不能用自身 clientHeight 测量）
+    const top = stage?.getBoundingClientRect().top ?? 0;
+    const availableH =
+      typeof window !== 'undefined' ? window.innerHeight - top - 16 : 0;
+    const h = clampCanvas(availableH);
+    if (w !== this._canvasW) this._canvasW = w;
+    if (h !== this._canvasH) this._canvasH = h;
   }
 
   // ---------- 事件 ----------

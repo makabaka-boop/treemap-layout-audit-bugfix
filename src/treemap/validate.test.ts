@@ -73,6 +73,41 @@ describe('权重树校验', () => {
     expect(validateTree(flat(60))).toBeTruthy();
     expect(() => validateTree(flat(61))).toThrowError(/叶子/);
   });
+
+  it('id 长度不超过 32 字符', () => {
+    expect(
+      validateTree({ id: 'x'.repeat(32), weight: 1 }),
+    ).toBeTruthy();
+    expect(() =>
+      validateTree({ id: 'x'.repeat(33), weight: 1 }),
+    ).toThrowError(/长度/);
+  });
+
+  it('叶权重上限 1,000,000', () => {
+    expect(
+      validateTree({ id: 'root', children: [{ id: 'a', weight: 1_000_000 }] }),
+    ).toBeTruthy();
+    expect(() =>
+      validateTree({ id: 'root', children: [{ id: 'a', weight: 1_000_001 }] }),
+    ).toThrowError(/权重/);
+  });
+
+  it('非法 id（非字符串/数字）被拒绝', () => {
+    expect(() =>
+      validateTree({ id: 123 as unknown as string, weight: 1 }),
+    ).toThrowError(/id/);
+    expect(() =>
+      validateTree({ id: 'root', children: [{ id: 'a b', weight: 1 }] }),
+    ).toThrowError(/ASCII/);
+  });
+
+  it('非对象/数组节点被拒绝', () => {
+    expect(() => validateTree(null)).toThrowError();
+    expect(() => validateTree([{ id: 'a', weight: 1 }])).toThrowError();
+    expect(() =>
+      validateTree({ id: 'root', children: [{ id: 'a', children: [{ id: 'b', weight: 1 }] }] }),
+    ).toBeTruthy();
+  });
 });
 
 describe('画布尺寸校验', () => {
