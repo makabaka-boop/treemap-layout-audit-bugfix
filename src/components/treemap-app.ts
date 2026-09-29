@@ -290,20 +290,39 @@ export class TreemapApp extends LitElement {
 
   firstUpdated(): void {
     if (typeof ResizeObserver !== 'undefined') {
-      this._resizeObserver = new ResizeObserver(() => this._fitToContainer());
+      this._resizeObserver = new ResizeObserver(this._fitToViewport);
       const wrap = this.renderRoot.querySelector('.stage');
       if (wrap) this._resizeObserver.observe(wrap);
     }
   }
 
+  connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('resize', this._fitToViewport);
+  }
+
   disconnectedCallback(): void {
+    window.removeEventListener('resize', this._fitToViewport);
     this._resizeObserver?.disconnect();
     super.disconnectedCallback();
   }
 
-  private _fitToContainer(): void {
-    return;
-  }
+  private _fitToViewport = (): void => {
+    if (!this._autoFit) return;
+
+    const stage = this.renderRoot.querySelector<HTMLElement>('.stage');
+    // 左侧面板约 330px，主区与外边距约 50px；高度扣除页头、状态栏和外边距。
+    const fallbackWidth = window.innerWidth - 380;
+    const availableWidth = stage?.clientWidth || fallbackWidth;
+    const availableHeight = window.innerHeight - 120;
+    const nextWidth = clampCanvas(availableWidth);
+    const nextHeight = clampCanvas(availableHeight);
+
+    if (nextWidth !== this._canvasW || nextHeight !== this._canvasH) {
+      this._canvasW = nextWidth;
+      this._canvasH = nextHeight;
+    }
+  };
 
   // ---------- 事件 ----------
 
@@ -319,16 +338,21 @@ export class TreemapApp extends LitElement {
   }
 
   private _onCanvasInput(which: 'w' | 'h', e: InputEvent): void {
-    const v = Number((e.target as HTMLInputElement).value);
-    if (!Number.isFinite(v)) return;
-    const clamped = clampCanvas(v);
-    if (which === 'w') this._canvasW = clamped;
-    else this._canvasH = clamped;
+    const raw = (e.target as HTMLInputElement).value;
+    const v = Number(raw);
+    const label = which === 'w' ? '宽' : '高';
+    if (!Number.isInteger(v) || v < MIN_CANVAS || v > MAX_CANVAS) {
+      this._errors = [`画布${label}必须是 ${MIN_CANVAS}～${MAX_CANVAS} 的整数像素`];
+      return;
+    }
+    this._errors = [];
+    if (which === 'w') this._canvasW = v;
+    else this._canvasH = v;
   }
 
   private _onAutoFit(e: Event): void {
     this._autoFit = (e.target as HTMLInputElement).checked;
-    if (this._autoFit) this._fitToContainer();
+    if (this._autoFit) this._fitToViewport();
   }
 
   private _onPreset(e: Event): void {

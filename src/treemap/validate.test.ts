@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateCanvasSize, validateTree } from './validate';
+import { MAX_ID_LENGTH, MAX_WEIGHT, validateCanvasSize, validateTree } from './validate';
 import type { TreeNode } from './types';
 
 const valid: TreeNode = {
@@ -40,8 +40,13 @@ describe('权重树校验', () => {
     ).toBeTruthy();
   });
 
+  it('id 长度不得超过 32 个字符', () => {
+    expect(validateTree({ id: 'a'.repeat(MAX_ID_LENGTH), weight: 1 })).toBeTruthy();
+    expect(() => validateTree({ id: 'a'.repeat(MAX_ID_LENGTH + 1), weight: 1 })).toThrowError(/长度/);
+  });
+
   it('叶权重必须为正整数', () => {
-    for (const weight of [0, -3, 1.5, Number.NaN, '5' as unknown as number]) {
+    for (const weight of [0, -3, 1.5, Number.NaN, MAX_WEIGHT + 1, '5' as unknown as number]) {
       expect(() =>
         validateTree({ id: 'root', children: [{ id: 'a', weight }] }),
       ).toThrowError();

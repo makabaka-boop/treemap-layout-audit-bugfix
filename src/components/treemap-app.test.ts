@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import './treemap-app'; // 副作用导入：注册 <treemap-app>
 import type { TreemapApp } from './treemap-app';
 import { layoutTreemap } from '../treemap/layout';
 import { PRESETS } from '../treemap/presets';
+import { MAX_WEIGHT } from '../treemap/validate';
 
 const leafRects = (el: TreemapApp): SVGRectElement[] => [
   ...el.shadowRoot!.querySelectorAll<SVGRectElement>('rect.leaf'),
@@ -30,6 +31,13 @@ function setInput(el: TreemapApp, selector: string, value: string): void {
 
 describe('<treemap-app>', () => {
   let el: TreemapApp;
+  const originalInnerWidth = window.innerWidth;
+  const originalInnerHeight = window.innerHeight;
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight });
+  });
 
   beforeEach(async () => {
     document.body.innerHTML = '';
@@ -151,9 +159,17 @@ describe('<treemap-app>', () => {
       { id: 'root', children: [{ id: 'a', weight: 1 }, { id: 'a', weight: 2 }] },
       {
         id: 'a',
-        children: [{ id: 'b', children: [{ id: 'c', children: [{ id: 'd', children: [{ id: 'e', weight: 1 }] }] }] }],
+        children: [
+          {
+            id: 'b',
+            children: [
+              { id: 'c', children: [{ id: 'd', children: [{ id: 'e', weight: 1 }] }] },
+            ],
+          },
+        ],
       },
       { id: 'root', children: [{ id: 'a', weight: 0 }] },
+      { id: 'root', children: [{ id: 'a', weight: MAX_WEIGHT + 1 }] },
     ];
     for (const c of cases) {
       setInput(el, '#json-input', JSON.stringify(c));
@@ -161,5 +177,69 @@ describe('<treemap-app>', () => {
       await el.updateComplete;
       expect(el.shadowRoot!.querySelector('.errors')!.textContent).not.toBe('');
     }
+  });
+
+  it('编辑非首个分支中的叶子权重后同步重排', async () => {
+    const before = el.shadowRoot!.querySelector('rect.leaf[data-id="b1"]')!;
+    const beforeW = Number(before.getAttribute('width'));
+    const beforeH = Number(before.getAttribute('height'));
+
+    setInput(el, 'input[data-leaf="b1"]', '80');
+    await el.updateComplete;
+
+    const expected = layoutTreemap(el._tree, 640, 480);
+    const actual = el.shadowRoot!.querySelector('rect.leaf[data-id="b1"]')!;
+    const leaf = expected.leaves.find((l) => l.id === 'b1')!;
+    expect(leaf.weight).toBe(80);
+    expect(Number(actual.getAttribute('x'))).toBe(leaf.rect.x);
+    expect(Number(actual.getAttribute('y'))).toBe(leaf.rect.y);
+    expect(Number(actual.getAttribute('width'))).toBe(leaf.rect.w);
+    expect(Number(actual.getAttribute('height'))).toBe(leaf.rect.h);
+    expect(
+      Number(actual.getAttribute('width')) !== beforeW ||
+        Number(actual.getAttribute('height')) !== beforeH,
+    ).toBe(true);
+    expect(domAreaSum(el)).toBe(640 * 480);
+  });
+
+  it('非法画布尺寸不会更新画布', async () => {
+    setInput(el, '#canvas-w', '1000');
+    await el.updateComplete;
+
+    const svg = el.shadowRoot!.querySelector('svg')!;
+    expect(svg.getAttribute('width')).toBe('640');
+    expect(el.shadowRoot!.querySelector('.errors')!.textContent).toContain('300～900');
+
+    setInput(el, '#canvas-w', '640');
+    setInput(el, '#canvas-h', '299.5');
+    await el.updateComplete;
+    expect(svg.getAttribute('height')).toBe('480');
+    expect(el.shadowRoot!.querySelector('.errors')!.textContent).toContain('300～900');
+
+    setInput(el, '#canvas-h', '640');
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.errors')).toBeNull();
+  });
+
+  it('勾选适应窗口后，窗口宽度变化时重算并钳制画布尺寸', async () => {
+    const checkbox = el.shadowRoot!.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 720 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 410 });
+    window.dispatchEvent(new Event('resize'));
+    await el.updateComplete;
+
+    expect(el._canvasW).toBe(340);
+    expect(el._canvasH).toBe(300);
+    expect(el.shadowRoot!.querySelector('svg')!.getAttribute('width')).toBe('340');
+    expect(domAreaSum(el)).toBe(340 * 300);
+
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
+    window.dispatchEvent(new Event('resize'));
+    await el.updateComplete;
+    expect(el._canvasW).toBe(900);
   });
 });
